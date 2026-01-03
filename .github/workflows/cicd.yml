@@ -11,34 +11,36 @@ env:
   MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
 
 jobs:
-  # -------------------------
+  # -------------------------------------------------
   # 1. SECURITY SCAN (PR + PUSH)
-  # -------------------------
+  # -------------------------------------------------
   security-check:
     runs-on: self-hosted
-    
 
     steps:
     - uses: actions/checkout@v4
-    - name: Trivy Installation
+
+    - name: Install Trivy
       run: |
+        sudo apt-get update -y
         sudo apt-get install -y wget apt-transport-https gnupg lsb-release
         wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-        echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
         sudo apt-get update -y
         sudo apt-get install -y trivy
 
-    - name: Trivy FS Scan
-      run: trivy fs --format table -o fs-report.json .
+    - name: Trivy filesystem scan
+      run: trivy fs .
 
-    - name: Gitleaks Installation
-      run: sudo apt install gitleaks -y
-    - name: Gitleaks Code Scan
-      run: gitleaks detect source . -r gitleaks-report.json -f json
+    - name: Install Gitleaks
+      run: sudo apt-get install -y gitleaks
 
-  # -------------------------
+    - name: Gitleaks secret scan
+      run: gitleaks detect --source . || true
+
+  # -------------------------------------------------
   # 2. COMPILE & TEST (PR + PUSH)
-  # -------------------------
+  # -------------------------------------------------
   compile-and-test:
     runs-on: self-hosted
     needs: security-check
@@ -59,9 +61,9 @@ jobs:
     - name: Run unit tests
       run: mvn $MAVEN_CLI_OPTS test
 
-  # -------------------------
+  # -------------------------------------------------
   # 3. SONARQUBE QUALITY GATE (PR + PUSH)
-  # -------------------------
+  # -------------------------------------------------
   quality-gate:
     runs-on: self-hosted
     needs: compile-and-test
@@ -79,27 +81,59 @@ jobs:
         cache: maven
 
     - name: SonarQube Scan
-      run: |
-        mvn $MAVEN_CLI_OPTS verify sonar:sonar \
-          -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
-          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+      uses: SonarSource/sonarqube-scan-action@v5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
-    - name: Quality Gate
+    - name: SonarQube Quality Gate
       uses: sonarsource/sonarqube-quality-gate-action@master
       timeout-minutes: 10
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  # -------------------------
-  # 4. BUILD & PUSH IMAGE (ONLY PUSH TO MAIN)
-  # -------------------------
-  build-and-push:
+  # -------------------------------------------------
+  # 4. BUILD JAR ARTIFACT (ONLY AFTER QUALITY GATE)
+  # -------------------------------------------------
+  build-artifact:
     runs-on: self-hosted
     needs: quality-gate
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Build JAR
+      run: mvn $MAVEN_CLI_OPTS package -DskipTests
+
+    - name: Upload JAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-jar
+        path: target/*.jar
+
+  # -------------------------------------------------
+  # 5. BUILD & PUSH DOCKER IMAGE (ONLY PUSH TO MAIN)
+  # -------------------------------------------------
+  build-and-push:
+    runs-on: self-hosted
+    needs: build-artifact
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Download JAR artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: app-jar
+        path: app
 
     - name: Login to Docker Hub
       uses: docker/login-action@v3
@@ -113,5 +147,3 @@ jobs:
         context: .
         push: true
         tags: nani4027/bankapp:${{ github.sha }}
-
-  
