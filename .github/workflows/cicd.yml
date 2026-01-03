@@ -14,49 +14,34 @@ jobs:
   # -------------------------
   # 1. SECURITY SCAN (PR + PUSH)
   # -------------------------
-  security-scan:
+  security-check:
     runs-on: self-hosted
-    permissions:
-      contents: read
-      security-events: write
+    
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Secret scan (Gitleaks)
-      uses: gitleaks/gitleaks-action@v2
-      with:
-        format: sarif
-        report-path: gitleaks.sarif
-
-    - name: Upload Gitleaks report
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: gitleaks.sarif
-
-    - name: Install Trivy
+    - name: Trivy Installation
       run: |
-        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-        | sh -s -- -b /usr/local/bin
+        sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+        echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+        sudo apt-get update -y
+        sudo apt-get install -y trivy
 
-    - name: Trivy filesystem scan
-      run: trivy fs --format sarif --output trivy.sarif .
+    - name: Trivy FS Scan
+      run: trivy fs --format table -o fs-report.json .
 
-    - name: Upload Trivy report
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: trivy.sarif
+    - name: Gitleaks Installation
+      run: sudo apt install gitleaks -y
+    - name: Gitleaks Code Scan
+      run: gitleaks detect source . -r gitleaks-report.json -f json
 
   # -------------------------
   # 2. COMPILE & TEST (PR + PUSH)
   # -------------------------
   compile-and-test:
     runs-on: self-hosted
-    needs: security-scan
+    needs: security-check
 
     steps:
     - uses: actions/checkout@v4
