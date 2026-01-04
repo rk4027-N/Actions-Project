@@ -34,15 +34,15 @@ jobs:
       run: |
         echo "Deploying image: $IMAGE"
 
-        kubectl set image deployment/bankapp-deployment \
+        kubectl set image deployment/bankapp \
           bankapp=$IMAGE \
           -n default --record
 
-        kubectl rollout status deployment/bankapp-deployment \
+        kubectl rollout status deployment/bankapp \
           -n default --timeout=300s
 
     - name: Rollback on failure
       if: failure()
       run: |
         echo "Rolling back deployment..."
-        kubectl rollout undo deployment/bankapp-deployment -n default
+        kubectl rollout undo deployment/bankapp -n default
